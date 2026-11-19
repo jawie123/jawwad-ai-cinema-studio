@@ -25,7 +25,7 @@
     <section class="lg:col-span-5 bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
       <div>
         <label class="block text-xs font-semibold uppercase text-zinc-400 mb-1.5">Video Idea / Story Prompt</label>
-        <textarea id="topicInput" rows="3" placeholder="e.g. A cute baby astronaut finding a glowing crystal cave on Mars, 3D Pixar style"
+        <textarea id="topicInput" rows="3" placeholder="e.g. Tiny cute penguin sitting atop a massive cute snowman, sunny arctic winter scenery, 3D Pixar style"
           class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-orange-500"></textarea>
       </div>
 
@@ -104,6 +104,37 @@
       else { canvas.width = 640; canvas.height = 360; }
     }
 
+    function parseScenesSafely(rawText, topic) {
+      const fallback = [
+        { subtitle: "Look at this magical moment!", image_prompt: `${topic}, wide establishing shot, 3D Pixar style, volumetric lighting, 8k` },
+        { subtitle: "Every detail sparkles in the light!", image_prompt: `${topic}, close-up expressive shot, soft bokeh, 3D Pixar Disney animation, 8k` },
+        { subtitle: "Pure joy and wonder all around!", image_prompt: `${topic}, dynamic low angle shot, vibrant colors, Octane 3D render, 8k` },
+        { subtitle: "Follow TOONVERSE for more!", image_prompt: `${topic}, warm golden hour glow, cute smiling expression, 3D Pixar style, 8k` }
+      ];
+
+      try {
+        // Handle both string and already-parsed object responses from Cloudflare
+        const textStr = typeof rawText === "string" ? rawText : JSON.stringify(rawText);
+        const cleaned = textStr.replace(/```json|```/gi, "").trim();
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return fallback;
+
+        // Remove trailing commas before } or ] that break JSON.parse
+        const fixedJson = jsonMatch[0].replace(/,\s*([}\]])/g, "$1");
+        const parsed = JSON.parse(fixedJson);
+        if (parsed && Array.isArray(parsed.scenes) && parsed.scenes.length > 0) {
+          return parsed.scenes.slice(0, 4).map((s, idx) => ({
+            subtitle: s.subtitle || fallback[idx].subtitle,
+            image_prompt: s.image_prompt || fallback[idx].image_prompt
+          }));
+        }
+        return fallback;
+      } catch (e) {
+        console.warn("Using clean fallback storyboard:", e);
+        return fallback;
+      }
+    }
+
     async function generateFullVideo() {
       const workerUrl = (document.getElementById("workerUrl").value.trim() || DEFAULT_WORKER).replace(/\/$/, "");
       const topic = document.getElementById("topicInput").value.trim() || "Cute baby astronaut finding glowing crystals on Mars, 3D Pixar style";
@@ -124,18 +155,8 @@
           body: JSON.stringify({ type: "script", prompt: topic }),
         });
         const scriptJson = await scriptRes.json();
-        const rawText = scriptJson.response || "";
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {
-          scenes: [
-            { subtitle: "Look what was hiding in the cave...", image_prompt: `${topic}, wide shot, 3D Pixar render, 8k` },
-            { subtitle: "Every crystal glows with pure magic!", image_prompt: `${topic}, close-up wonder, glowing crystals, 3D Pixar style` },
-            { subtitle: "Suddenly the entire world lights up!", image_prompt: `${topic}, dramatic volumetric lighting, 3D animation` },
-            { subtitle: "Subscribe for more 3D AI stories!", image_prompt: `${topic}, cute smiling hero, vibrant colors, Pixar style` }
-          ]
-        };
+        const scenesData = parseScenesSafely(scriptJson.response, topic);
 
-        const scenesData = parsed.scenes.slice(0, 4);
         document.getElementById("scenesList").innerHTML = scenesData.map((s, i) => `
           <div class="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
             <div class="font-bold text-orange-400">Scene ${i + 1}: ${s.subtitle}</div>
@@ -155,6 +176,8 @@
           if (imgJson.image) {
             const imgObj = await loadBase64Image("data:image/png;base64," + imgJson.image);
             generatedScenes.push({ img: imgObj, subtitle: scenesData[i].subtitle });
+          } else if (imgJson.error) {
+            throw new Error(imgJson.error);
           }
         }
 
